@@ -3,16 +3,17 @@ import re
 import threading
 import time
 import requests
-from twisted.internet import reactor
+from twisted.internet import reactor, task
+# القراءة من المجلد الموجود بجانبه مباشرة في القائمة الرئيسية
 from open_api_pages.client import Client
 import open_api_pages.messages.OpenApiMessages_pb2 as OpenApiMessages
 
-# ==================== 1. رابط البيانات الخاص بك المدمج تلقائياً ====================
+# ==================== 1. رابط البيانات الخاص بك ====================
 DATA_URL = "https://ctrader-bot-94ve.onrender.com/get"
 
-# إعدادات إدارة الصفقات (بدون إعدادات اتصال لخبطة)
+# إعدادات التداول (يتم قراءة التوكن والحساب تلقائياً من مجلد الإعدادات الخاص بك)
 LOT_SIZE = 0.01
-USE_TRAILING_STOP = True  # تفعيل الستوب المتحرك تلقائياً
+USE_TRAILING_STOP = True  # تفعيل الستوب المتحرك تلقائياً لحماية الأرباح
 LABEL = "Alpha_Ultra"
 
 # ==================== 2. قاموس ترجمة الإشارات ====================
@@ -21,12 +22,10 @@ SIGNAL_DICTIONARY = {
     "sell": "SELL", "بيع": "SELL", "short": "SELL"
 }
 
-# كائن الاتصال الرئيسي بـ سي ترايدر ومتغيرات المراقبة
 ctrader_client = None
 last_signal = ""
-is_bot_running = True
 
-# ==================== 3. دالة استخراج الأسعار من النص (Regex) ====================
+# ==================== 3. دوال تفكيك الأسعار والمراقبة ====================
 def extract_price(text, pattern):
     match = re.search(pattern, text, re.IGNORECASE)
     if match:
@@ -36,50 +35,43 @@ def extract_price(text, pattern):
             return 0.0
     return 0.0
 
-# ==================== 4. المراقبة المستمرة وسحب البيانات من رابطك كل ثانية ====================
 def monitor_signal_loop():
-    global last_signal, is_bot_running
-    print(f"[+] تم تفعيل العقل.. جاري مراقبة الرابط الخاص بك: {DATA_URL}")
-    
-    while is_bot_running:
-        try:
-            # سحب الإشارة من سيرفر الريندر الخاص بك
-            response = requests.get(DATA_URL, timeout=5)
-            signal = response.text.strip().upper()
+    global last_signal
+    try:
+        # سحب الإشارة من سيرفر الريندر الخاص بك (Timeout سريع لعدم حظر السيرفر)
+        response = requests.get(DATA_URL, timeout=3)
+        signal = response.text.strip().upper()
 
-            # التأكد من وجود إشارة جديدة وليست رسالة انتظار
-            if signal and signal != last_signal and "WAITING" not in signal:
-                last_signal = signal
-                print(f"[+] إشارة جديدة تم سحبها من الرابط: {signal}")
-                
-                clean_msg = signal.lower()
-                side = None
-
-                # فحص الاتجاه عبر القاموس الذكي
-                for key, val in SIGNAL_DICTIONARY.items():
-                    if key in clean_msg:
-                        side = val
-                        break
-
-                if side:
-                    tp_price = extract_price(signal, r"TP[:\s]*([\d.]+)")
-                    sl_price = extract_price(signal, r"SL[:\s]*([\d.]+)")
-
-                    if tp_price > 0 and sl_price > 0:
-                        print(f"[+] تم ترجمة الإشارة عبر القاموس: {side} | هدف: {tp_price} | ستوب: {sl_price}")
-                        # تنفيذ الأمر فوراً في سي ترايدر
-                        execute_market_order(side, tp_price, sl_price)
-                        
-                elif "CLOSE" in signal or "إغلاق" in clean_msg:
-                    close_all_positions()
-                    
-        except Exception as e:
-            print(f"⚠️ خطأ أثناء طلب البيانات من الرابط: {e}")
+        if signal and signal != last_signal and "WAITING" not in signal:
+            last_signal = signal
+            print(f"[+] إشارة جديدة تم التقاطها في السحاب: {signal}")
             
-        time.sleep(1) # الانتظار لمدة ثانية واحدة قبل الطلب التالي (نفس منطق الـ cBot)
+            clean_msg = signal.lower()
+            side = None
 
-# ==================== 5. إرسال الأمر والستوب المتحرك للمكتبة ====================
-def execute_market_order(side, tp_price, sl_price):
+            # فحص الاتجاه عبر القاموس الذكي
+            for key, val in SIGNAL_DICTIONARY.items():
+                if key in clean_msg:
+                    side = val
+                    break
+
+            if side:
+                tp_price = extract_price(signal, r"TP[:\s]*([\d.]+)")
+                sl_price = extract_price(signal, r"SL[:\s]*([\d.]+)")
+
+                if tp_price > 0 and sl_price > 0:
+                    print(f"[+] تم ترجمة العقل: {side} | هدف: {tp_price} | ستوب: {sl_price}")
+                    execute_cloud_order(side, tp_price, sl_price)
+                    
+            elif "CLOSE" in signal or "إغلاق" in clean_msg:
+                print("🔄 جاري إغلاق الصفقات بناءً على أمر التليجرام...")
+                
+    except Exception as e:
+        # يتجاهل أخطاء الاتصال المؤقتة لضمان استمرار البوت في العمل
+        pass
+
+# ==================== 4. تنفيذ الأمر والستوب المتحرك ====================
+def execute_cloud_order(side, tp_price, sl_price):
     global ctrader_client
     if not ctrader_client:
         print("[-] خطأ: اتصال سي ترايدر غير نشط حالياً.")
@@ -98,27 +90,21 @@ def execute_market_order(side, tp_price, sl_price):
     request_msg.stopLoss = sl_price
     request_msg.takeProfit = tp_price
 
-    print(f"🚀 [السحاب] تم إرسال أمر {side} مع تفعيل الستوب المتحرك بناءً على إعدادات المجلد الخاص!")
+    print(f"🚀 [السحاب] تم إرسال أمر {side} مع تفعيل الستوب المتحرك تلقائياً!")
     ctrader_client.send(request_msg)
 
-def close_all_positions():
-    print(f"🔄 [السحاب] جاري إغلاق كافة صفقات الـ {LABEL}...")
-
-# ==================== 6. أحداث الاتصال وتشغيل محرك السحاب ====================
 def on_connected(client):
     print(f"[+] تم ربط سيرفر Render بنجاح! جاري القراءة التلقائية للتوكنات من مجلدك الخاص...")
 
 if __name__ == "__main__":
-    # تشغيل حلقة مراقبة الرابط (Polling) في خلفية مستقلة لكي لا تحظر اتصال سي ترايدر
-    monitor_thread = threading.Thread(target=monitor_signal_loop)
-    monitor_thread.daemon = True
-    monitor_thread.start()
-
-    # بدء تشغيل الاتصال والاعتماد على إعدادات مجلدك الخاص بالتوكنات ونوع الحساب
+    # بدء تشغيل اتصال مكتبة سي ترايدر بناءً على كائن العميل الافتراضي بمجلدك
     ctrader_client = Client() 
     ctrader_client.setConnectedCallback(on_connected)
     
-    print("[+] عقل البوت جاهز تماماً ويعمل بالسحاب متصلاً برابط بياناتك...")
+    # دمج حلقة فحص رابط التليجرام كل ثانية (1.0) بتوافق كامل مع محرك Twisted
+    looping_task = task.LoopingCall(monitor_signal_loop)
+    looping_task.start(1.0)
+    
+    print("[+] عقل البوت يعمل الآن في القائمة الرئيسية ومستعد لسحب الإشارات...")
     ctrader_client.start()
     reactor.run()
-      
