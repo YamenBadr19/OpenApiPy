@@ -2,10 +2,11 @@ import os
 import sys
 import re
 import requests
+import threading
+from http.server import SimpleHTTPRequestHandler, HTTPServer
 from twisted.internet import reactor, task
-from twisted.web import server, resource
 
-# الاستدعاء المتوافق 100% مع مستودعك
+# الاستدعاء المتوافق مع مستودعك
 from ctrader_open_api import Client, Protobuf, TcpProtocol, Auth, EndPoints
 from ctrader_open_api.messages.OpenApiMessages_pb2 import *
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import *
@@ -28,18 +29,29 @@ if account_id:
 LOT_SIZE = 0.01
 LABEL = "Alpha_Ultra"
 
-# ==================== 2. خادم ويب وهمي لحل مشكلة الـ Port Timeout ====================
-class RenderHealthCheck(resource.Resource):
-    isLeaf = True
-    def render_GET(self, request):
-        request.setHeader(b"content-type", b"text/plain")
-        return b"Bot is Running Successfully!"
+# ==================== 2. خادم ويب أصلي خفيف لتخطي حظر Render ====================
+class HealthCheckHandler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write("Bot is Running Successfully!".encode("utf-8"))
+
+    def log_message(self, format, *args):
+        return  # كتم سجلات طلبات الويب لتبقى الشاشة نظيفة للإشارات فقط
+
+def run_health_server():
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        print(f"🌐 [خادم الويب]: تم فتح البوابة {port} بنجاح عبر نظام بايثون الأصلي!")
+        server.serve_forever()
+    except Exception as e:
+        print(f"⚠️ تنبيه خادم الويب: {e}")
 
 def start_web_server():
-    # ربط البوت بالبوابة المطلوبة من ريندر ليتخطى الفحص تلقائياً
-    site = server.Site(RenderHealthCheck())
-    reactor.listenTCP(port, site)
-    print(f"🌐 [خادم الويب]: تم فتح البوابة {port} بنجاح لتخطي حظر Render!")
+    # تشغيل الخادم في مسار جانبي (Thread) لكي لا يعطل حركة البوت الأساسية
+    web_thread = threading.Thread(target=run_health_server, daemon=True)
+    web_thread.start()
 
 # ==================== 3. القواميس الذكية المفلترة ====================
 SIGNAL_DICTIONARY = {
@@ -224,7 +236,7 @@ if __name__ == "__main__":
         print("❌ خطأ: يرجى إدخال المتغيرات في Render أولاً.")
         sys.exit(1)
 
-    # 1. تشغيل خادم الويب المصغر لتمرير فحص Render التلقائي والـ Port Scan
+    # 1. تشغيل خادم الويب المصغر الأصلي المتوافق مع بايثون 3.14 وتخطي الـ Port Scan
     start_web_server()
 
     # 2. تشغيل البوت والربط الأساسي مع سي ترايدر
@@ -233,4 +245,4 @@ if __name__ == "__main__":
     client.setMessageReceivedCallback(on_message_received)
     client.startService()
     reactor.run()
-    
+        
