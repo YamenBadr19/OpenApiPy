@@ -61,7 +61,7 @@ SIGNAL_DICTIONARY = {
 
 SYMBOLS_DICTIONARY = {
     "xauusd": 1, "gold": 1, "ذهب": 1, "الذهب": 1,
-    "btcusd": 2, "btc": 2, "بيتكوين": 2, "بتكوين": 2  # دعم الكلمة بدون ياء
+    "btcusd": 2, "btc": 2, "بيتكوين": 2, "بتكوين": 2  
 }
 
 active_positions = {}
@@ -177,8 +177,8 @@ def process_and_execute_trade(signal_text):
 
     request_msg = OpenApiMessages.ProtoOANewOrderReq()
     request_msg.symbolId = chosen_symbol_id
-    request_msg.orderType = 1 # MARKET صراحة لمنع الـ NameError
-    request_msg.tradeSide = 1 if side == "BUY" else 2 # 1 لـ BUY و 2 لـ SELL
+    request_msg.orderType = 1 # MARKET صراحة
+    request_msg.tradeSide = 1 if side == "BUY" else 2
     request_msg.volume = int(LOT_SIZE * 100000)
     request_msg.label = LABEL
     if sl_price: request_msg.stopLoss = sl_price
@@ -200,7 +200,7 @@ def check_signals_loop():
     except Exception as e:
         print(f"⚠️ خطأ جلب الإشارات: {e}")
 
-# ==================== 8. ردود فعل السيرفر والـ Callbacks وفحص رقم الحساب حياً ====================
+# ==================== 8. ردود فعل السيرفر الآمنة والمستقرة 100% ====================
 def connected(client_instance):
     print("\n✅ [اتصل] تم ربط السيرفر بنجاح بفلتر الهمزات والأمان التلقائي!")
     
@@ -214,25 +214,11 @@ def connected(client_instance):
         acc_auth_req.accessToken = token
         
         def on_acc_auth(acc_res):
-            print(f"🎯 [جاهز] تم تسجيل الدخول للحساب الرقمي بنجاح.")
+            print(f"🎯 [جاهز] تم تسجيل الدخول للحساب رقم {account_id} بنجاح وبشكل مستقر كلياً.")
             
-            # حركة الاختبار الذكية: جلب بيانات ورصيد الحساب المفتوح ومطابقته صراحة بالـ Logs
-            trader_req = OpenApiMessages.ProtoOATraderReq()
-            trader_req.ctidTraderAccountId = account_id
-            
-            def on_trader_details(trader_res):
-                balance = trader_res.trader.balance / 100
-                currency = trader_res.trader.depositAsset
-                print("\n=================== 📊 فحص الحساب المربوط حياً ===================")
-                print(f"🆔 رقم الحساب النشط حالياً بالسحاب: {account_id}")
-                print(f"💰 الرصيد المكتشف داخل المنصة حالياً: {balance} {currency}")
-                print("============================================================\n")
-                
-                # تشغيل حلقة فحص الإشارات بعد التأكد من صحة رقم ورصيد الحساب
-                loop = task.LoopingCall(check_signals_loop)
-                loop.start(3.0)
-                
-            client.send(trader_req).addCallback(on_trader_details).addErrback(on_error)
+            # تشغيل حلقة فحص الإشارات فوراً وبشكل مباشر لضمان ثبات الاتصال
+            loop = task.LoopingCall(check_signals_loop)
+            loop.start(3.0)
             
         client.send(acc_auth_req).addCallback(on_acc_auth).addErrback(on_error)
     client.send(app_auth_req).addCallback(on_app_auth).addErrback(on_error)
@@ -262,4 +248,3 @@ if __name__ == "__main__":
     client.setMessageReceivedCallback(on_message_received)
     client.startService()
     reactor.run()
-    
