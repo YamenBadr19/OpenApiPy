@@ -204,29 +204,41 @@ def check_signals_loop():
 def connected(client_instance):
     print("\n✅ [اتصل] تم ربط السيرفر بنجاح بفلتر الهمزات والأمان التلقائي!")
     
+    # 1. مصادقة التطبيق أولاً
     app_auth_req = OpenApiMessages.ProtoOAApplicationAuthReq()
     app_auth_req.clientId = client_id
     app_auth_req.clientSecret = client_secret
     
     def on_app_auth(res):
-        acc_auth_req = OpenApiMessages.ProtoOAAccountAuthReq()
-        acc_auth_req.ctidTraderAccountId = account_id
-        acc_auth_req.accessToken = token
+        print("✅ [تطبيق] تم قبول التطبيق. جاري جلب الحسابات...")
         
-        def on_acc_auth(acc_res):
-            print(f"🎯 [جاهز] تم تسجيل الدخول للحساب رقم {account_id} بنجاح وبشكل مستقر كلياً.")
+        # 2. جلب قائمة الحسابات المرتبطة بالتوكن (الخطوة المفقودة)
+        acc_list_req = OpenApiMessages.ProtoOAGetAccountListByAccessTokenReq()
+        acc_list_req.accessToken = token
+        
+        def on_account_list(acc_list_res):
+            print(f"📋 [حسابات] تم استلام قائمة الحسابات. جاري تفعيل الحساب {account_id}...")
             
-            # تشغيل حلقة فحص الإشارات فوراً وبشكل مباشر لضمان ثبات الاتصال
-            loop = task.LoopingCall(check_signals_loop)
-            loop.start(3.0)
+            # 3. مصادقة الحساب المحدد
+            acc_auth_req = OpenApiMessages.ProtoOAAccountAuthReq()
+            acc_auth_req.ctidTraderAccountId = account_id
+            acc_auth_req.accessToken = token
             
-        client.send(acc_auth_req).addCallback(on_acc_auth).addErrback(on_error)
+            def on_acc_auth(acc_res):
+                print(f"🎯 [جاهز] تم تسجيل الدخول للحساب رقم {account_id} بنجاح وبشكل مستقر كلياً.")
+                # تشغيل حلقة فحص الإشارات
+                loop = task.LoopingCall(check_signals_loop)
+                loop.start(3.0)
+                
+            client.send(acc_auth_req).addCallback(on_acc_auth).addErrback(on_error)
+            
+        client.send(acc_list_req).addCallback(on_account_list).addErrback(on_error)
+        
     client.send(app_auth_req).addCallback(on_app_auth).addErrback(on_error)
 
 def disconnected(client_instance, reason):
     print(f"\n❌ [انفصال] تم قطع الاتصال بالسيرفر: {reason}")
     print("🔄 [إعادة اتصال] جاري إعادة المحاولة بعد 10 ثوانٍ لتجنب الحظر...")
-    # إعادة تشغيل الخدمة بعد 10 ثوانٍ بدلاً من فوراً
     reactor.callLater(10, client.startService)
 
 def on_message_received(client_instance, message):
