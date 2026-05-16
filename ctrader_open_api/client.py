@@ -47,7 +47,7 @@ class Client(ClientService):
             self._responseDeferreds.pop(message.clientMsgId)
             responseDeferred.callback(message)
 
-    def send(self, message, clientMsgId=None, responseTimeoutInSeconds=5, **params):
+    def send(self, message, clientMsgId=None, responseTimeoutInSeconds=60, **params):
         if type(message) in [str, int]:
             message = Protobuf.get(message, **params)
         responseDeferred = defer.Deferred(self._cancelMessageDiferred)
