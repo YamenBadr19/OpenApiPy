@@ -6,10 +6,10 @@ import threading
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 from twisted.internet import reactor, task
 
-# الاستدعاء المتوافق مع مستودعك
+# الاستدعاء الصريح المباشر لجميع مكونات وأوامر سي ترايدر لمنع الـ NameError نهائياً
 from ctrader_open_api import Client, Protobuf, TcpProtocol, Auth, EndPoints
-from ctrader_open_api.messages.OpenApiMessages_pb2 import *
-from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import *
+import ctrader_open_api.messages.OpenApiMessages_pb2 as OpenApiMessages
+import ctrader_open_api.messages.OpenApiCommonMessages_pb2 as OpenApiCommon
 
 # ==================== 1. الإعدادات وقراءة متغيرات البيئة تلقائياً ====================
 DATA_URL = "https://ctrader-bot-94ve.onrender.com/get"
@@ -38,7 +38,7 @@ class HealthCheckHandler(SimpleHTTPRequestHandler):
         self.wfile.write("Bot is Running Successfully!".encode("utf-8"))
 
     def log_message(self, format, *args):
-        return  # كتم سجلات طلبات الويب لتبقى الشاشة نظيفة للإشارات فقط
+        return
 
 def run_health_server():
     try:
@@ -49,20 +49,19 @@ def run_health_server():
         print(f"⚠️ تنبيه خادم الويب: {e}")
 
 def start_web_server():
-    # تشغيل الخادم في مسار جانبي (Thread) لكي لا يعطل حركة البوت الأساسية
     web_thread = threading.Thread(target=run_health_server, daemon=True)
     web_thread.start()
 
-# ==================== 3. القواميس الذكية المفلترة ====================
+# ==================== 3. القواميس الذكية المفلترة والموسعة (اللهجات والصيغ) ====================
 SIGNAL_DICTIONARY = {
-    "buy": "BUY", "شراء": "BUY", "long": "BUY",
-    "sell": "SELL", "بيع": "SELL", "short": "SELL",
-    "close": "CLOSE", "اغلاق": "CLOSE", "كلوز": "CLOSE", "قفل": "CLOSE"
+    "buy": "BUY", "شراء": "BUY", "long": "BUY", "اشتري": "BUY", "اشتروا": "BUY", "دخلنا": "BUY",
+    "sell": "SELL", "بيع": "SELL", "short": "SELL", "بيعوا": "SELL",
+    "close": "CLOSE", "اغلاق": "CLOSE", "كلوز": "CLOSE", "قفل": "CLOSE", "سكر": "CLOSE"
 }
 
 SYMBOLS_DICTIONARY = {
-    "xauusd": 1, "gold": 1, "ذهب": 1,
-    "btcusd": 2, "btc": 2, "بيتكوين": 2
+    "xauusd": 1, "gold": 1, "ذهب": 1, "الذهب": 1,
+    "btcusd": 2, "btc": 2, "بيتكوين": 2, "بتكوين": 2  # دعم الكلمة بدون ياء
 }
 
 active_positions = {}
@@ -83,10 +82,14 @@ def extract_signal_details(text):
     clean_text = normalize_arabic_text(text)
     
     side = None
-    for key, value in SIGNAL_DICTIONARY.items():
-        if key in clean_text:
-            side = value
-            break
+    first_word_match = re.search(r'\b(buy|sell|close|شراء|بيع|اغلاق|قفل|كلوز|اشتري|اشتروا|بيعوا|سكر)\b', clean_text)
+    if first_word_match:
+        side = SIGNAL_DICTIONARY.get(first_word_match.group(1))
+    else:
+        for key, value in SIGNAL_DICTIONARY.items():
+            if key in clean_text:
+                side = value
+                break
             
     is_secure = any(word in clean_text for word in ["تامين", "امان", "امن", "ستوب على الدخول", "دخول", "secure"])
 
@@ -149,7 +152,7 @@ def monitor_market_prices(current_price, symbol_id):
                 active_positions[pos_id]["step"] = 2
 
 def send_modify_stop_loss(position_id, new_stop_price):
-    modify_msg = ProtoOAModifyPositionReq()
+    modify_msg = OpenApiMessages.ProtoOAModifyPositionReq()
     modify_msg.ctidTraderAccountId = account_id
     modify_msg.positionId = position_id
     modify_msg.stopLoss = new_stop_price
@@ -169,18 +172,19 @@ def process_and_execute_trade(signal_text):
         return
 
     if not side:
+        print("⚠️ خطأ في تفكيك اتجاه الصفقة أو النص غير مفهوم كأمر تداول.")
         return
 
-    request_msg = ProtoOANewOrderReq()
+    request_msg = OpenApiMessages.ProtoOANewOrderReq()
     request_msg.symbolId = chosen_symbol_id
-    request_msg.orderType = ProtoOAOrderType.MARKET
-    request_msg.tradeSide = ProtoOATradeSide.BUY if side == "BUY" else ProtoOATradeSide.SELL
+    request_msg.orderType = 1 # MARKET صراحة لمنع الـ NameError
+    request_msg.tradeSide = 1 if side == "BUY" else 2 # 1 لـ BUY و 2 لـ SELL
     request_msg.volume = int(LOT_SIZE * 100000)
     request_msg.label = LABEL
     if sl_price: request_msg.stopLoss = sl_price
-    request_msg.takeProfit = tp2_price if tp2_price else tp1_price
+    if tp1_price: request_msg.takeProfit = tp1_price
 
-    print(f"🚀 [تنفيذ] إرسال أمر {side} للرمز ID: {chosen_symbol_id} إلى سي ترايدر...")
+    print(f"🚀 [تنفيذ] إرسال أمر {side} للرمز ID: {chosen_symbol_id} إلى سي ترايدر بأمان...")
     client.send(request_msg)
 
 def check_signals_loop():
@@ -196,24 +200,39 @@ def check_signals_loop():
     except Exception as e:
         print(f"⚠️ خطأ جلب الإشارات: {e}")
 
-# ==================== 8. ردود فعل السيرفر والـ Callbacks ====================
+# ==================== 8. ردود فعل السيرفر والـ Callbacks وفحص رقم الحساب حياً ====================
 def connected(client_instance):
     print("\n✅ [اتصل] تم ربط السيرفر بنجاح بفلتر الهمزات والأمان التلقائي!")
     
-    app_auth_req = ProtoOAApplicationAuthReq()
+    app_auth_req = OpenApiMessages.ProtoOAApplicationAuthReq()
     app_auth_req.clientId = client_id
     app_auth_req.clientSecret = client_secret
     
     def on_app_auth(res):
-        acc_auth_req = ProtoOAAccountAuthReq()
+        acc_auth_req = OpenApiMessages.ProtoOAAccountAuthReq()
         acc_auth_req.ctidTraderAccountId = account_id
         acc_auth_req.accessToken = token
         
         def on_acc_auth(acc_res):
-            print(f"🎯 [جاهز] الحساب ({account_id}) يعمل الآن بأعلى مستويات الذكاء البرمجي.")
-            # تشغيل حلقة فحص الإشارات
-            loop = task.LoopingCall(check_signals_loop)
-            loop.start(3.0)
+            print(f"🎯 [جاهز] تم تسجيل الدخول للحساب الرقمي بنجاح.")
+            
+            # حركة الاختبار الذكية: جلب بيانات ورصيد الحساب المفتوح ومطابقته صراحة بالـ Logs
+            trader_req = OpenApiMessages.ProtoOATraderReq()
+            trader_req.ctidTraderAccountId = account_id
+            
+            def on_trader_details(trader_res):
+                balance = trader_res.trader.balance / 100
+                currency = trader_res.trader.depositAsset
+                print("\n=================== 📊 فحص الحساب المربوط حياً ===================")
+                print(f"🆔 رقم الحساب النشط حالياً بالسحاب: {account_id}")
+                print(f"💰 الرصيد المكتشف داخل المنصة حالياً: {balance} {currency}")
+                print("============================================================\n")
+                
+                # تشغيل حلقة فحص الإشارات بعد التأكد من صحة رقم ورصيد الحساب
+                loop = task.LoopingCall(check_signals_loop)
+                loop.start(3.0)
+                
+            client.send(trader_req).addCallback(on_trader_details).addErrback(on_error)
             
         client.send(acc_auth_req).addCallback(on_acc_auth).addErrback(on_error)
     client.send(app_auth_req).addCallback(on_app_auth).addErrback(on_error)
@@ -222,27 +241,25 @@ def disconnected(client_instance, reason):
     print(f"\n❌ [انفصال] تم قطع الاتصال بالسيرفر: {reason}")
 
 def on_message_received(client_instance, message):
-    if message.payloadType == ProtoOASpotEvent().payloadType:
-        msg = ProtoOASpotEvent()
+    if message.payloadType == OpenApiMessages.ProtoOASpotEvent().payloadType:
+        msg = OpenApiMessages.ProtoOASpotEvent()
         msg.ParseFromString(message.serialize())
         if msg.bidPrice:
             monitor_market_prices(msg.bidPrice, msg.symbolId)
 
 def on_error(failure):
-    print("🚨 [خطأ]: ", failure)
+    print("🚨 [خطأ في تواصل سي ترايدر]: ", failure)
 
 if __name__ == "__main__":
     if not all([client_id, client_secret, token, account_id]):
         print("❌ خطأ: يرجى إدخال المتغيرات في Render أولاً.")
         sys.exit(1)
 
-    # 1. تشغيل خادم الويب المصغر الأصلي المتوافق مع بايثون 3.14 وتخطي الـ Port Scan
     start_web_server()
 
-    # 2. تشغيل البوت والربط الأساسي مع سي ترايدر
     client.setConnectedCallback(connected)
     client.setDisconnectedCallback(disconnected)
     client.setMessageReceivedCallback(on_message_received)
     client.startService()
     reactor.run()
-        
+    
