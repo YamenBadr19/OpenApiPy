@@ -5,6 +5,8 @@ from twisted.application.internet import ClientService
 from ctrader_open_api.protobuf import Protobuf
 from ctrader_open_api.factory import Factory
 from twisted.internet import reactor, defer
+from twisted.internet.ssl import CertificateOptions
+
 
 class Client(ClientService):
     def __init__(self, host, port, protocol, retryPolicy=None, clock=None, prepareConnection=None, numberOfMessagesToSendPerSecond=5):
