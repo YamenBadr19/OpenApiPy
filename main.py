@@ -3,8 +3,9 @@ import sys
 import re
 import requests
 from twisted.internet import reactor, task
+from twisted.web import server, resource
 
-# الاستدعاء الصحيح والمتوافق 100% مع مجلد المكتبة الأساسي في مستودعك
+# الاستدعاء المتوافق 100% مع مستودعك
 from ctrader_open_api import Client, Protobuf, TcpProtocol, Auth, EndPoints
 from ctrader_open_api.messages.OpenApiMessages_pb2 import *
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import *
@@ -27,7 +28,20 @@ if account_id:
 LOT_SIZE = 0.01
 LABEL = "Alpha_Ultra"
 
-# ==================== 2. قاموس الكلمات بعد توحيد الفلتر (صافي وبدون همزات) ====================
+# ==================== 2. خادم ويب وهمي لحل مشكلة الـ Port Timeout ====================
+class RenderHealthCheck(resource.Resource):
+    isLeaf = True
+    def render_GET(self, request):
+        request.setHeader(b"content-type", b"text/plain")
+        return b"Bot is Running Successfully!"
+
+def start_web_server():
+    # ربط البوت بالبوابة المطلوبة من ريندر ليتخطى الفحص تلقائياً
+    site = server.Site(RenderHealthCheck())
+    reactor.listenTCP(port, site)
+    print(f"🌐 [خادم الويب]: تم فتح البوابة {port} بنجاح لتخطي حظر Render!")
+
+# ==================== 3. القواميس الذكية المفلترة ====================
 SIGNAL_DICTIONARY = {
     "buy": "BUY", "شراء": "BUY", "long": "BUY",
     "sell": "SELL", "بيع": "SELL", "short": "SELL",
@@ -43,22 +57,17 @@ active_positions = {}
 last_signal = ""
 client = Client(host, EndPoints.PROTOBUF_PORT, TcpProtocol)
 
-# ==================== 3. فلتـر تنظيف وتوحيد الهمزات والحروف ====================
+# ==================== 4. فلتر تنظيف وتوحيد الهمزات والحروف ====================
 def normalize_arabic_text(text):
     text = text.lower()
-    # إزالة التشكيل والتنوين إن وجد
     text = re.sub(r'[\u064b-\u0652]', '', text)
-    # تحويل كل أشكال الألف والهمزات (أ، إ، آ) إلى ألف صافية (ا)
     text = re.sub(r'[أإآ]', 'ا', text)
-    # تحويل التاء المربوطة (ة) إلى هاء (ه) لضمان كلمات مثل (أمنة / آمنة)
     text = re.sub(r'ة', 'ه', text)
-    # تحويل الألف المقصورة (ى) إلى ياء (ي)
     text = re.sub(r'ى', 'ي', text)
     return text
 
-# ==================== 4. دالة تفكيك الإشارة الذكية ====================
+# ==================== 5. دالة تفكيك الإشارة الذكية ====================
 def extract_signal_details(text):
-    # تمرير النص على فلتر توحيد الهمزات أولاً قبل الفحص
     clean_text = normalize_arabic_text(text)
     
     side = None
@@ -67,18 +76,15 @@ def extract_signal_details(text):
             side = value
             break
             
-    # فحص كلمات التأمين (بفضل الفلتر كتبناها هنا بدون همزات وهي تشمل كل الأشكال)
     is_secure = any(word in clean_text for word in ["تامين", "امان", "امن", "ستوب على الدخول", "دخول", "secure"])
 
     sl_price = None
     tp1_price = None
     tp2_price = None
     
-    # استخراج الستوب لوس (البحث في النص المفلتر)
     sl_match = re.search(r'(sl|stop\s*loss|ستوب|الوقف|ايقاف|وقف):\s*([0-9.]+)', clean_text)
     if sl_match: sl_price = float(sl_match.group(2))
     
-    # استخراج الهدف الأول
     tp1_match = re.search(r'(tp1|هدف\s*1|الهدف\s*الاول):\s*([0-9.]+)', clean_text)
     if tp1_match: 
         tp1_price = float(tp1_match.group(2))
@@ -86,7 +92,6 @@ def extract_signal_details(text):
         tp_generic = re.search(r'(tp|take\s*profit|هدف|الهدف):\s*([0-9.]+)', clean_text)
         if tp_generic: tp1_price = float(tp_generic.group(2))
 
-    # استخراج الهدف الثاني
     tp2_match = re.search(r'(tp2|هدف\s*2|الهدف\s*الثاني):\s*([0-9.]+)', clean_text)
     if tp2_match: tp2_price = float(tp2_match.group(2))
     
@@ -97,9 +102,9 @@ def extract_symbol_id(text):
     for key, symbol_id in SYMBOLS_DICTIONARY.items():
         if key in clean_text:
             return symbol_id
-    return 1  # افتراضياً الذهب إذا لم يذكر رمز صريح (يتوافق تماماً مع كلمة "أمنوا" المنفردة)
+    return 1
 
-# ==================== 5. المراقبة الديناميكية لأسعار السوق وحجز الأرباح ====================
+# ==================== 6. المراقبة الديناميكية لأسعار السوق وحجز الأرباح ====================
 def monitor_market_prices(current_price, symbol_id):
     for pos_id, pos_data in list(active_positions.items()):
         if pos_data["symbolId"] != symbol_id:
@@ -138,7 +143,7 @@ def send_modify_stop_loss(position_id, new_stop_price):
     modify_msg.stopLoss = new_stop_price
     client.send(modify_msg)
 
-# ==================== 6. تنفيذ الصفقات وحلقات الفحص ====================
+# ==================== 7. تنفيذ الصفقات وحلقات الفحص ====================
 def process_and_execute_trade(signal_text):
     side, sl_price, tp1_price, tp2_price, is_secure = extract_signal_details(signal_text)
     chosen_symbol_id = extract_symbol_id(signal_text)
@@ -147,7 +152,6 @@ def process_and_execute_trade(signal_text):
         print(f"🛑 [أمر إغلاق]: تم رصد إشارة إغلاق للرمز ID: {chosen_symbol_id}.")
         return
 
-    # إذا كانت الرسالة عبارة عن كلمة تأمين سريعة مثل "أمنوا" أو "آمنه"
     if is_secure:
         print(f"🛡️ [أمر تأمين تلقائي]: تم رصد كلمة تأمين/أمان بفضل الفلتر للرمز ID: {chosen_symbol_id}. جاري نقل الستوب للدخول...")
         return
@@ -180,7 +184,7 @@ def check_signals_loop():
     except Exception as e:
         print(f"⚠️ خطأ جلب الإشارات: {e}")
 
-# ==================== 7. ردود فعل السيرفر والـ Callbacks ====================
+# ==================== 8. ردود فعل السيرفر والـ Callbacks ====================
 def connected(client_instance):
     print("\n✅ [اتصل] تم ربط السيرفر بنجاح بفلتر الهمزات والأمان التلقائي!")
     
@@ -194,7 +198,8 @@ def connected(client_instance):
         acc_auth_req.accessToken = token
         
         def on_acc_auth(acc_res):
-            print(f"🎯 [جاهز] الحساب ({account_id}) يعمل الآن بأعلى مستويات الذكاء البرمجي لحماية الحساب.")
+            print(f"🎯 [جاهز] الحساب ({account_id}) يعمل الآن بأعلى مستويات الذكاء البرمجي.")
+            # تشغيل حلقة فحص الإشارات
             loop = task.LoopingCall(check_signals_loop)
             loop.start(3.0)
             
@@ -219,8 +224,13 @@ if __name__ == "__main__":
         print("❌ خطأ: يرجى إدخال المتغيرات في Render أولاً.")
         sys.exit(1)
 
+    # 1. تشغيل خادم الويب المصغر لتمرير فحص Render التلقائي والـ Port Scan
+    start_web_server()
+
+    # 2. تشغيل البوت والربط الأساسي مع سي ترايدر
     client.setConnectedCallback(connected)
     client.setDisconnectedCallback(disconnected)
     client.setMessageReceivedCallback(on_message_received)
     client.startService()
     reactor.run()
+    
