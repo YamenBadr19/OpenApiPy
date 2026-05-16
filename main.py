@@ -225,6 +225,9 @@ def connected(client_instance):
 
 def disconnected(client_instance, reason):
     print(f"\n❌ [انفصال] تم قطع الاتصال بالسيرفر: {reason}")
+    print("🔄 [إعادة اتصال] جاري إعادة المحاولة بعد 10 ثوانٍ لتجنب الحظر...")
+    # إعادة تشغيل الخدمة بعد 10 ثوانٍ بدلاً من فوراً
+    reactor.callLater(10, client.startService)
 
 def on_message_received(client_instance, message):
     if message.payloadType == OpenApiMessages.ProtoOASpotEvent().payloadType:
