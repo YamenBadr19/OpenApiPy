@@ -158,8 +158,41 @@ def send_modify_stop_loss(position_id, new_stop_price):
     modify_msg.stopLoss = new_stop_price
     client.send(modify_msg)
 
-# ==================== 7. تنفيذ الصفقات وحلقات الفحص ====================
-تم تعديل الدالة process_and_execute_trade بإضافة السطر المطلوب الذي يحدد رقم حساب التداول (ctidTraderAccountId)، مما يحل الخطأ EncodeError. تم أيضًا تحسين معالجة إشارات UNKNOWN لتجاهلها بهدوء. بعد رفع هذا التعديل، سيصبح البوت جاهزًا لتنفيذ أوامر التداول بنجاح.
+def process_and_execute_trade(signal_text):
+    # تجاهل الإشارات التي تحتوي على كلمة UNKNOWN
+    if "unknown" in signal_text.lower():
+        print("ℹ️ تم تجاهل إشارة غير معروفة (تحتوي على UNKNOWN).")
+        return
+
+    side, sl_price, tp1_price, tp2_price, is_secure = extract_signal_details(signal_text)
+    chosen_symbol_id = extract_symbol_id(signal_text)
+
+    if side == "CLOSE":
+        print(f"🛑 [أمر إغلاق]: تم رصد إشارة إغلاق للرمز ID: {chosen_symbol_id}.")
+        return
+
+    if is_secure:
+        print(f"🛡️ [أمر تأمين تلقائي]: تم رصد كلمة تأمين/أمان بفضل الفلتر للرمز ID: {chosen_symbol_id}. جاري نقل الستوب للدخول...")
+        return
+
+    if not side:
+        print("⚠️ خطأ في تفكيك اتجاه الصفقة أو النص غير مفهوم كأمر تداول.")
+        return
+
+    request_msg = OpenApiMessages.ProtoOANewOrderReq()
+    request_msg.ctidTraderAccountId = account_id  # هذا السطر المضاف لإصلاح الخطأ
+    request_msg.symbolId = chosen_symbol_id
+    request_msg.orderType = 1  # MARKET صراحة
+    request_msg.tradeSide = 1 if side == "BUY" else 2
+    request_msg.volume = int(LOT_SIZE * 100000)
+    request_msg.label = LABEL
+    if sl_price:
+        request_msg.stopLoss = sl_price
+    if tp1_price:
+        request_msg.takeProfit = tp1_price
+
+    print(f"🚀 [تنفيذ] إرسال أمر {side} للرمز ID: {chosen_symbol_id} إلى سي ترايدر بأمان...")
+    client.send(request_msg)
 
 def check_signals_loop():
     global last_signal
