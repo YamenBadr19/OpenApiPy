@@ -217,29 +217,20 @@ def connected(client_instance):
     app_auth_req.clientSecret = client_secret
     
     def on_app_auth(res):
-        print("✅ [تطبيق] تم قبول التطبيق. جاري جلب الحسابات...")
+        print("✅ [تطبيق] تم قبول التطبيق. جاري تفعيل الحساب...")
         
-        # 2. جلب قائمة الحسابات المرتبطة بالتوكن (الخطوة المفقودة)
-        acc_list_req = OpenApiMessages.ProtoOAGetAccountListByAccessTokenReq()
-        acc_list_req.accessToken = token
+        # 2. مصادقة الحساب المحدد مباشرة (الطريقة اللي نجحت)
+        acc_auth_req = OpenApiMessages.ProtoOAAccountAuthReq()
+        acc_auth_req.ctidTraderAccountId = account_id
+        acc_auth_req.accessToken = token
         
-        def on_account_list(acc_list_res):
-            print(f"📋 [حسابات] تم استلام قائمة الحسابات. جاري تفعيل الحساب {account_id}...")
+        def on_acc_auth(acc_res):
+            print(f"🎯 [جاهز] تم تسجيل الدخول للحساب رقم {account_id} بنجاح وبشكل مستقر كلياً.")
+            # تشغيل حلقة فحص الإشارات
+            loop = task.LoopingCall(check_signals_loop)
+            loop.start(3.0)
             
-            # 3. مصادقة الحساب المحدد
-            acc_auth_req = OpenApiMessages.ProtoOAAccountAuthReq()
-            acc_auth_req.ctidTraderAccountId = account_id
-            acc_auth_req.accessToken = token
-            
-            def on_acc_auth(acc_res):
-                print(f"🎯 [جاهز] تم تسجيل الدخول للحساب رقم {account_id} بنجاح وبشكل مستقر كلياً.")
-                # تشغيل حلقة فحص الإشارات
-                loop = task.LoopingCall(check_signals_loop)
-                loop.start(3.0)
-                
-            client.send(acc_auth_req).addCallback(on_acc_auth).addErrback(on_error)
-            
-        client.send(acc_list_req).addCallback(on_account_list).addErrback(on_error)
+        client.send(acc_auth_req).addCallback(on_acc_auth).addErrback(on_error)
         
     client.send(app_auth_req).addCallback(on_app_auth).addErrback(on_error)
 
