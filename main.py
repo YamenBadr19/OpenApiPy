@@ -190,7 +190,7 @@ def process_and_execute_trade(signal_text):
 def check_signals_loop():
     global last_signal
     try:
-        response = requests.get(DATA_URL, timeout=5)
+        response = requests.get(DATA_URL, timeout=45)
         if response.status_code == 200:
             current_signal = response.text.strip()
             if current_signal and current_signal != last_signal:
