@@ -274,11 +274,13 @@ def connected(client_instance):
     app_auth.clientId = client_id
     app_auth.clientSecret = client_secret
     def on_app(res):
+        print("✅ [تطبيق] تم قبول التطبيق")  # <-- هذا السطر للتشخيص
         send_log("✅ قبول التطبيق، جاري تفعيل الحساب...")
         acc_auth = OpenApiMessages.ProtoOAAccountAuthReq()
         acc_auth.ctidTraderAccountId = account_id
         acc_auth.accessToken = token
         def on_acc(res2):
+            print(f"🎯 [جاهز] تم تسجيل الدخول للحساب {account_id}")  # <-- وهذا السطر للتشخيص
             send_log(f"🎯 جاهز على الحساب {account_id}")
         client.send(acc_auth).addCallback(on_acc).addErrback(on_error)
     client.send(app_auth).addCallback(on_app).addErrback(on_error)
