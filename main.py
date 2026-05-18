@@ -44,7 +44,7 @@ active_positions = {}
 
 client = Client(host, EndPoints.PROTOBUF_PORT, TcpProtocol)
 
-# ==================== 2. خادم ويب خفيف (لـ Render) ====================
+# ==================== 2. خادم ويب خفيف ====================
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -80,7 +80,7 @@ SYMBOLS_DICTIONARY = {
     "btcusd": 2, "btc": 2, "بيتكوين": 2, "بتكوين": 2
 }
 
-# ==================== 5. فلتر الهمزات ====================
+# ==================== 5. دوال مساعدة ====================
 def normalize_arabic_text(text):
     text = text.lower()
     text = re.sub(r'[\u064b-\u0652]', '', text)
@@ -89,11 +89,9 @@ def normalize_arabic_text(text):
     text = re.sub(r'ى', 'ي', text)
     return text
 
-# ==================== 6. استخراج الإشارة (أهداف متعددة، لوت، تكرار) ====================
 def extract_signal_details(text):
     clean_text = normalize_arabic_text(text)
     
-    # --- اتجاه ---
     side = None
     match = re.search(r'\b(buy|sell|close|شراء|بيع|اغلاق|قفل|كلوز|اشتري|اشتروا|بيعوا|سكر)\b', clean_text)
     if match:
@@ -104,7 +102,6 @@ def extract_signal_details(text):
                 side = v
                 break
 
-    # --- أهداف ---
     tp_list = []
     for tp in re.findall(r'(?:^|\n)\s*(?:tp|هدف|الهدف)\s*[:.]?\s*([0-9.]+)', clean_text, re.IGNORECASE):
         tp_list.append(float(tp))
@@ -120,7 +117,6 @@ def extract_signal_details(text):
         if match:
             tp_list.append(float(match.group(2)))
 
-    # --- وقف خسارة ---
     sl_price = None
     match = re.search(r'(?:sl|stop\s*loss|ستوب|الوقف|ايقاف|وقف)\s*[:.]?\s*([0-9.]+)', clean_text, re.IGNORECASE)
     if match:
@@ -130,7 +126,6 @@ def extract_signal_details(text):
         if match:
             sl_price = float(match.group(1))
 
-    # --- حجم اللوت ---
     lot_size = None
     match = re.search(r'(\d+(?:\.\d+)?)\s*:?\s*لوت', clean_text)
     if match:
@@ -144,7 +139,6 @@ def extract_signal_details(text):
             if match:
                 lot_size = float(match.group(1))
 
-    # --- التكرار ---
     repeat_count = 1
     match = re.search(r'(\d+)\s*مرات', clean_text)
     if match:
@@ -154,7 +148,6 @@ def extract_signal_details(text):
         if match:
             repeat_count = int(match.group(1))
 
-    # --- تأمين ---
     is_secure = any(w in clean_text for w in ["تامين", "امان", "امن", "ستوب على الدخول", "دخول", "secure"])
 
     return side, sl_price, tp_list, is_secure, lot_size, repeat_count
@@ -166,10 +159,16 @@ def extract_symbol_id(text):
             return sym_id
     return 1
 
-# ==================== 7. تنفيذ الصفقات (خاص بكل قناة) ====================
+# ==================== 6. تنفيذ الصفقات ====================
 def process_and_execute_trade(signal_text, chat_id=None):
     global last_signal
+    
+    print(f"🔵 [تشخيص] استقبلت: {signal_text}")
+    send_log(f"🔵 [تشخيص] استقبلت: {signal_text}")
+    
     if signal_text == last_signal:
+        print(f"🔵 [تشخيص] تجاهل (مكرر)")
+        send_log(f"🔵 [تشخيص] تجاهل (مكرر)")
         return
     last_signal = signal_text
 
@@ -180,7 +179,6 @@ def process_and_execute_trade(signal_text, chat_id=None):
     side, sl_price, tp_list, is_secure, lot_size, repeat_count = extract_signal_details(signal_text)
     symbol_id = extract_symbol_id(signal_text)
 
-    # --- أمر الإغلاق (فقط صفقات القناة الحالية) ---
     if side == "CLOSE":
         closed = []
         for pos_id, data in list(active_positions.items()):
@@ -206,7 +204,6 @@ def process_and_execute_trade(signal_text, chat_id=None):
         send_log("⚠️ لا توجد أهداف")
         return
 
-    # فتح صفقة لكل هدف × تكرار
     for i, tp_price in enumerate(tp_list, 1):
         for _ in range(repeat_count):
             req = OpenApiMessages.ProtoOANewOrderReq()
@@ -222,28 +219,24 @@ def process_and_execute_trade(signal_text, chat_id=None):
             client.send(req)
             send_log(f"🚀 فتح {side} هدف {i} (TP {tp_price}) حجم {lot_size or LOT_SIZE}")
 
-# ==================== 8. ربط الصفقات بالقناة عند التأكيد ====================
+# ==================== 7. استقبال رسائل cTrader ====================
 def on_message_received(client_instance, message):
     global current_chat_id
     if message.payloadType == OpenApiMessages.ProtoOASpotEvent().payloadType:
         msg = OpenApiMessages.ProtoOASpotEvent()
         msg.ParseFromString(message.payload)
         if msg.bidPrice:
-            monitor_market_prices(msg.bidPrice, msg.symbolId)
+            pass
 
     if message.payloadType == OpenApiMessages.ProtoOAExecutionEvent().payloadType:
         event = OpenApiMessages.ProtoOAExecutionEvent()
         event.ParseFromString(message.payload)
-        if event.executionType == 1:  # فتح صفقة
+        if event.executionType == 1:
             pos_id = event.positionId
             active_positions[pos_id] = {"chat_id": current_chat_id}
             send_log(f"📌 صفقة {pos_id} مرتبطة بقناة {current_chat_id}")
 
-# ==================== 9. مراقبة الأسعار (اختياري) ====================
-def monitor_market_prices(current_price, symbol_id):
-    pass  # يمكنك إضافة منطق تعديل الستوب هنا لاحقاً
-
-# ==================== 10. عميل تيليجرام ====================
+# ==================== 8. عميل تيليجرام ====================
 async def start_telegram():
     global current_chat_id
     tg = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
@@ -266,7 +259,7 @@ def run_telegram():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(start_telegram())
 
-# ==================== 11. اتصال cTrader ====================
+# ==================== 9. اتصال cTrader ====================
 def connected(client_instance):
     print("✅ [اتصل]")
     send_log("✅ اتصل بـ cTrader")
@@ -274,13 +267,13 @@ def connected(client_instance):
     app_auth.clientId = client_id
     app_auth.clientSecret = client_secret
     def on_app(res):
-        print("✅ [تطبيق] تم قبول التطبيق")  # <-- هذا السطر للتشخيص
+        print("✅ [تطبيق] تم قبول التطبيق")
         send_log("✅ قبول التطبيق، جاري تفعيل الحساب...")
         acc_auth = OpenApiMessages.ProtoOAAccountAuthReq()
         acc_auth.ctidTraderAccountId = account_id
         acc_auth.accessToken = token
         def on_acc(res2):
-            print(f"🎯 [جاهز] تم تسجيل الدخول للحساب {account_id}")  # <-- وهذا السطر للتشخيص
+            print(f"🎯 [جاهز] تم تسجيل الدخول للحساب {account_id}")
             send_log(f"🎯 جاهز على الحساب {account_id}")
         client.send(acc_auth).addCallback(on_acc).addErrback(on_error)
     client.send(app_auth).addCallback(on_app).addErrback(on_error)
@@ -292,7 +285,7 @@ def disconnected(client_instance, reason):
 def on_error(failure):
     send_log(f"🚨 خطأ cTrader: {failure}")
 
-# ==================== 12. التشغيل ====================
+# ==================== 10. التشغيل ====================
 if __name__ == "__main__":
     if not all([client_id, client_secret, token, account_id]):
         print("❌ متغيرات ناقصة")
