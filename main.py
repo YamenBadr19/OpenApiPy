@@ -227,13 +227,13 @@ def on_message_received(client_instance, message):
     global current_chat_id
     if message.payloadType == OpenApiMessages.ProtoOASpotEvent().payloadType:
         msg = OpenApiMessages.ProtoOASpotEvent()
-        msg.ParseFromString(message.serialize())
+        msg.ParseFromString(message.payload)
         if msg.bidPrice:
             monitor_market_prices(msg.bidPrice, msg.symbolId)
 
     if message.payloadType == OpenApiMessages.ProtoOAExecutionEvent().payloadType:
         event = OpenApiMessages.ProtoOAExecutionEvent()
-        event.ParseFromString(message.serialize())
+        event.ParseFromString(message.payload)
         if event.executionType == 1:  # فتح صفقة
             pos_id = event.positionId
             active_positions[pos_id] = {"chat_id": current_chat_id}
