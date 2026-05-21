@@ -36,7 +36,7 @@ chat_ids = [int(x.strip()) for x in CHAT_IDS_STR.split(",") if x.strip()]
 LOG_BOT_TOKEN = os.getenv("LOG_BOT_TOKEN", "")
 LOG_CHAT_ID = os.getenv("LOG_CHAT_ID", "")
 
-LOT_SIZE = 0.01
+LOT_SIZE = 0.10  # <--- تم التكبير للاختبار
 LABEL = "Alpha_Ultra"
 last_signal = ""
 current_chat_id = None
@@ -166,10 +166,11 @@ def process_and_execute_trade(signal_text, chat_id=None):
     print(f"🔵 [تشخيص] استقبلت: {signal_text}")
     send_log(f"🔵 [تشخيص] استقبلت: {signal_text}")
     
-    if signal_text == last_signal:
-        print(f"🔵 [تشخيص] تجاهل (مكرر)")
-        send_log(f"🔵 [تشخيص] تجاهل (مكرر)")
-        return
+    # --- تم تعطيل فحص التكرار مؤقتاً للاختبار ---
+    # if signal_text == last_signal:
+    #     print(f"🔵 [تشخيص] تجاهل (مكرر)")
+    #     send_log(f"🔵 [تشخيص] تجاهل (مكرر)")
+    #     return
     last_signal = signal_text
 
     if "unknown" in signal_text.lower():
@@ -178,6 +179,8 @@ def process_and_execute_trade(signal_text, chat_id=None):
 
     side, sl_price, tp_list, is_secure, lot_size, repeat_count = extract_signal_details(signal_text)
     symbol_id = extract_symbol_id(signal_text)
+
+    print(f"🔵 [تشخيص] الاتجاه: {side}, الرمز: {symbol_id}, TP: {tp_list}, SL: {sl_price}")
 
     if side == "CLOSE":
         closed = []
@@ -216,6 +219,8 @@ def process_and_execute_trade(signal_text, chat_id=None):
             if sl_price: req.stopLoss = sl_price
             req.takeProfit = tp_price
 
+            print(f"🔵 [تشخيص] جاري إرسال الأمر: حجم={req.volume}, SL={req.stopLoss}, TP={req.takeProfit}")
+            send_log(f"🔵 [تشخيص] إرسال: حجم={req.volume}, SL={req.stopLoss}, TP={req.takeProfit}")
             client.send(req)
             send_log(f"🚀 فتح {side} هدف {i} (TP {tp_price}) حجم {lot_size or LOT_SIZE}")
 
@@ -275,6 +280,8 @@ def connected(client_instance):
         def on_acc(res2):
             print(f"🎯 [جاهز] تم تسجيل الدخول للحساب {account_id}")
             send_log(f"🎯 جاهز على الحساب {account_id}")
+            # --- أمر اختبار تلقائي بعد ثانيتين من الجاهزية ---
+            reactor.callLater(2, lambda: process_and_execute_trade("شراء ذهب SL 4400 TP 4600"))
         client.send(acc_auth).addCallback(on_acc).addErrback(on_error)
     client.send(app_auth).addCallback(on_app).addErrback(on_error)
 
