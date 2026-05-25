@@ -1,136 +1,67 @@
 import os
-import sys
-import re
-import requests
 import asyncio
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from twisted.internet import reactor, task
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
+import json
+import re
+from telethon import TelegramClient, events, functions
 
-# cTrader
-from ctrader_open_api import Client, Protobuf, TcpProtocol, Auth, EndPoints
-import ctrader_open_api.messages.OpenApiMessages_pb2 as OpenApiMessages
+# إعدادات الاتصال (سيتم سحبها من المتغيرات في Render)
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
 
-# ==================== 1. متغيرات البيئة ====================
-host_type = os.getenv("HOST_TYPE", "demo").lower()
-host = EndPoints.PROTOBUF_LIVE_HOST if host_type == "live" else EndPoints.PROTOBUF_DEMO_HOST
-port = int(os.getenv("PORT", 8080))
+# إنشاء جلسة البوت
+tg = TelegramClient('yamen_session', API_ID, API_HASH)
 
-client_id = os.getenv("CLIENT_ID")
-client_secret = os.getenv("CLIENT_SECRET")
-token = os.getenv("ACCESS_TOKEN")
-account_id = os.getenv("ACCOUNT_ID")
+def parse_to_json(msg):
+    msg_lower = msg.lower()
+    
+    # 1. تحديد الاتجاه (Action)
+    action = None
+    if any(word in msg_lower for word in ["شراء", "buy", "long", "دخول"]): action = "BUY"
+    elif any(word in msg_lower for word in ["بيع", "sell", "short"]): action = "SELL"
+    elif any(word in msg_lower for word in ["تأمين", "break even", "be"]): action = "BREAK_EVEN"
+    elif any(word in msg_lower for word in ["إغلاق", "close"]): action = "CLOSE"
+    
+    if not action: return None
+    
+    # 2. تحليل الأصول (Symbol)
+    symbol = "XAUUSD"
+    if any(w in msg_lower for w in ["البيتكوين", "btc", "bitcoin"]): symbol = "BTCUSD"
+    
+    # 3. تحليل اللوت، الأهداف، والستوب لوز
+    lot = float(re.search(r'(\d+(\.\d+)?)\s*(lot|لوت|l)', msg_lower).group(1)) if re.search(r'(\d+(\.\d+)?)\s*(lot|لوت|l)', msg_lower) else 0.01
+    sl = float(re.search(r'(sl|ستوب لوز|وقف الخسارة)[:\s]*([\d.]+)', msg_lower).group(2)) if re.search(r'(sl|ستوب لوز|وقف الخسارة)[:\s]*([\d.]+)', msg_lower) else 0.0
+    target = float(re.search(r'(هدف|target)[:\s]*([\d.]+)', msg_lower).group(2)) if re.search(r'(هدف|target)[:\s]*([\d.]+)', msg_lower) else 0.0
+    pips = int(re.search(r'(\d+)\s*(نقطة|بيب|pip)', msg_lower).group(1)) if re.search(r'(\d+)\s*(نقطة|بيب|pip)', msg_lower) else 0
+    
+    # 4. بناء هيكل الإشارة
+    return json.dumps({
+        "ACTION": action,
+        "SYMBOL": symbol,
+        "LOT": lot,
+        "SL": sl,
+        "TARGET": target,
+        "PIPS": pips,
+        "MANAGEMENT": {"BREAK_EVEN_TRIGGER": 0.75, "PROFIT_MARGIN": 1.0}
+    })
 
-if account_id:
-    account_id = int(account_id)
+@tg.on(events.NewMessage)
+async def handle_signal(event):
+    # الفلترة الذكية (مجلد AutoTrade)
+    dialog_filters = await tg(functions.messages.GetDialogFiltersRequest())
+    is_in_autotrade = any(f.title == "AutoTrade" and event.chat_id in [p.channel_id for p in f.include_peers if hasattr(p, 'channel_id')] for f in dialog_filters)
+    
+    if not is_in_autotrade: return
 
-API_ID = int(os.getenv("API_ID", "0"))
-API_HASH = os.getenv("API_HASH", "")
-SESSION_STR = os.getenv("SESSION_STR", "")
-CHAT_IDS_STR = os.getenv("CHAT_IDS", "")
-chat_ids = [int(x.strip()) for x in CHAT_IDS_STR.split(",") if x.strip()]
+    signal_json = parse_to_json(event.raw_text)
+    if signal_json:
+        print(f"📡 إشارة تم استخراجها: {signal_json}")
+        # هنا سيتم لاحقاً ربط الإخراج بـ cTrader API
+        await tg.send_message('me', f"✅ إشارة معالجة:\n`{signal_json}`")
 
-LOG_BOT_TOKEN = os.getenv("LOG_BOT_TOKEN", "")
-LOG_CHAT_ID = os.getenv("LOG_CHAT_ID", "")
-
-client = Client(host, EndPoints.PROTOBUF_PORT, TcpProtocol)
-
-# ==================== 2. خادم ويب خفيف ====================
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write("Bot is Running Successfully!".encode("utf-8"))
-    def log_message(self, *args):
-        pass
-
-def run_health():
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    print(f"🌐 [خادم الويب] منفذ {port}")
-    server.serve_forever()
-
-# ==================== 3. بوت السجلات ====================
-def send_log(message):
-    if LOG_BOT_TOKEN and LOG_CHAT_ID:
-        try:
-            url = f"https://api.telegram.org/bot{LOG_BOT_TOKEN}/sendMessage"
-            requests.post(url, data={"chat_id": LOG_CHAT_ID, "text": message}, timeout=5)
-        except:
-            pass
-
-# ==================== 4. عميل تيليجرام ====================
-async def start_telegram():
-    tg = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
+async def main():
     await tg.start()
-    send_log("🤖 تيليجرام جاهز (للاستماع فقط)")
+    print("🚀 محرك المترجم (Listener) يعمل بكفاءة...")
     await tg.run_until_disconnected()
 
-def run_telegram():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(start_telegram())
-
-# ==================== 5. اتصال cTrader ====================
-def connected(client_instance):
-    print("✅ [اتصل]")
-    send_log("✅ اتصل بـ cTrader")
-    app_auth = OpenApiMessages.ProtoOAApplicationAuthReq()
-    app_auth.clientId = client_id
-    app_auth.clientSecret = client_secret
-    def on_app(res):
-        print("✅ [تطبيق] تم قبول التطبيق")
-        send_log("✅ قبول التطبيق، جاري تفعيل الحساب...")
-        acc_auth = OpenApiMessages.ProtoOAAccountAuthReq()
-        acc_auth.ctidTraderAccountId = account_id
-        acc_auth.accessToken = token
-        def on_acc(res2):
-            print(f"🎯 [جاهز] تم تسجيل الدخول للحساب {account_id}")
-            send_log(f"🎯 جاهز على الحساب {account_id}")
-
-            # 🧪 اختبار أبسط أمر شراء
-            def send_test_order():
-                try:
-                    req = OpenApiMessages.ProtoOANewOrderReq()
-                    req.ctidTraderAccountId = account_id
-                    req.symbolId = 1   # الذهب
-                    req.orderType = 1   # MARKET
-                    req.tradeSide = 1   # BUY
-                    req.volume = 1000   # 0.01 لوت
-                    req.label = "TestSimple"
-
-                    client.send(req)
-                    print("🚀 [اختبار] تم إرسال أمر شراء بسيط للذهب. تحقق من المنصة.")
-                    send_log("🚀 [اختبار] تم إرسال أمر شراء بسيط للذهب. تحقق من المنصة.")
-                except Exception as e:
-                    print(f"❌ [اختبار] فشل إرسال الأمر: {e}")
-                    send_log(f"❌ [اختبار] فشل إرسال الأمر: {e}")
-
-            # نرسل الأمر بعد 3 ثوانٍ من الجاهزية
-            reactor.callLater(3, send_test_order)
-
-        client.send(acc_auth).addCallback(on_acc).addErrback(on_error)
-    client.send(app_auth).addCallback(on_app).addErrback(on_error)
-
-def disconnected(client_instance, reason):
-    send_log(f"❌ انفصال: {reason}")
-    reactor.callLater(10, client.startService)
-
-def on_error(failure):
-    send_log(f"🚨 خطأ cTrader: {failure}")
-
-# ==================== 6. التشغيل ====================
-if __name__ == "__main__":
-    if not all([client_id, client_secret, token, account_id]):
-        print("❌ متغيرات ناقصة")
-        sys.exit(1)
-
-    threading.Thread(target=run_health, daemon=True).start()
-    threading.Thread(target=run_telegram, daemon=True).start()
-
-    client.setConnectedCallback(connected)
-    client.setDisconnectedCallback(disconnected)
-    client.startService()
-    reactor.run()
+if __name__ == '__main__':
+    asyncio.run(main())
